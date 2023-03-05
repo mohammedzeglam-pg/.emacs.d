@@ -1,0 +1,1486 @@
+#+TITLE: Cassilas Config For minimal emacs
+#+PROPERTY: header-args: :tangle init.el
+
+* Early init
+#+begin_src elisp :tangle early-init.el
+  ;;; early-init.el --- Emacs pre package.el & GUI configuration -*- lexical-binding: t; -*-
+  ;;; Code:
+  (setq package-enable-at-startup nil)
+  (setq inhibit-default-init nil)
+  (setq native-comp-async-report-warnings-errors nil)
+  (setq gc-cons-threshold most-positive-fixnum
+        gc-cons-percentage 1)
+  (defvar default-file-name-handler-alist file-name-handler-alist)
+  (setq file-name-handler-alist nil)
+  (defun +gc-after-focus-change ()
+    "Run GC when frame loses focus."
+    (run-with-idle-timer
+     5 nil
+     (lambda () (unless (frame-focus-state) (garbage-collect)))))
+  (defun +reset-init-values ()
+    (run-with-idle-timer
+     1 nil
+     (lambda ()
+       (setq file-name-handler-alist default-file-name-handler-alist
+             gc-cons-percentage 0.1
+             gc-cons-threshold 100000000)
+       (message "gc-cons-threshold & file-name-handler-alist restored")
+       (when (boundp 'after-focus-change-function)
+         (add-function :after after-focus-change-function #'+gc-after-focus-change)))))
+
+  (with-eval-after-load 'elpaca
+    (add-hook 'elpaca-after-init-hook '+reset-init-values))
+  (advice-add #'x-apply-session-resources :override #'ignore)
+  ;; Local Variables:
+  ;; no-byte-compile: t
+  ;; no-native-compile: t
+  ;; no-update-autoloads: t
+  ;; End:
+  (provide 'early-init)
+  ;;; early-init.el ends here
+#+end_src
+
+
+* Init
+** Package management.
+*** Custom Vars
+#+begin_src emacs-lisp :tangle init.el
+  (defconst literate-file (concat user-emacs-directory "config.org"))
+#+end_src
+*** Elpaca
+Elpaca is an elisp package manager, It is a replacement for the built-in Emacs package manager, package.el.
+#+begin_src elisp :tangle init.el
+  ;; -*- lexical-binding: t; -*-
+  (defvar elpaca-installer-version 0.1)
+  (defvar elpaca-directory (expand-file-name "elpaca/" user-emacs-directory))
+  (defvar elpaca-builds-directory (expand-file-name "builds/" elpaca-directory))
+  (defvar elpaca-order '(elpaca :repo "https://github.com/progfolio/elpaca.git"
+                                :ref nil
+                                :files (:defaults (:exclude "extensions"))
+                                :build (:not elpaca--activate-package)))
+  (when-let ((repo  (expand-file-name "repos/elpaca/" elpaca-directory))
+             (build (expand-file-name "elpaca/" elpaca-builds-directory))
+             (order (cdr elpaca-order))
+             ((add-to-list 'load-path (if (file-exists-p build) build repo)))
+             ((not (file-exists-p repo))))
+    (condition-case-unless-debug err (if-let ((buffer (pop-to-buffer-same-window "*elpaca-installer*"))
+                                              ((zerop (call-process "git" nil buffer t "clone" (plist-get order
+                                                                                                          :repo) repo)))
+                                              (default-directory repo)
+                                              ((zerop (call-process "git" nil buffer t "checkout" (or (plist-get order
+                                                                                                                 :ref) "--"))))
+                                              (emacs (concat invocation-directory invocation-name))
+                                              ((zerop (call-process emacs nil buffer nil "-Q" "-L" "." "--batch" "--eval" "(byte-recompile-directory \".\" 0 'force)"))))
+                                         (progn (require 'elpaca)
+                                                (elpaca-generate-autoloads "elpaca" repo)
+                                                (kill-buffer buffer))
+                                       (error "%s" (with-current-buffer buffer (buffer-string))))
+      ((error)
+       (warn "%s" err)
+       (delete-directory repo 'recursive))))
+  (require 'elpaca-autoloads)
+  (add-hook 'after-init-hook #'elpaca-process-queues)
+  (elpaca `(,@elpaca-order))
+  (with-eval-after-load 'evil
+    (with-eval-after-load 'elpaca-ui
+      (evil-make-intercept-map elpaca-ui-mode-map)))
+
+#+end_src
+*** use-package
+#+begin_src elisp :tangle init.el
+  ;; Install use-package support
+  (elpaca elpaca-use-package
+    ;; Enable :elpaca use-package keyword.
+    (elpaca-use-package-mode)
+    ;; Assume :elpaca t unless otherwise specified.
+    (setq elpaca-use-package-by-default t))
+
+  ;; Block until current queue processed.
+  (elpaca-wait)
+#+end_src
+
+
+** Better Default
+*** Emacs
+#+begin_src elisp :tangle init.el
+  ;;Useful for configuring built-in emacs features.
+  (use-package emacs
+    :elpaca nil
+    :custom ((user-full-name  "Mohammed Zeglam")
+             (user-mail-address  "mohammedzeglam@gmail.com")
+             (user-login-name  "mzerone")
+             (truncate-lines  t)
+             (menu-bar-mode  nil)
+             (tool-bar-mode  nil)
+             (scroll-bar-mode  nil)
+             (indent-tabs-mode  nil)
+             (ring-bell-function #'ignore)
+             (standard-indent 2)
+             (use-short-answers t)
+             (inhibit-startup-screen t)
+             (delete-old-versions t)
+             (use-dialog-box nil)
+             (create-lockfiles nil)
+             (recentf-mode t)
+             (save-place-mode 1)
+             ;; (backup-directory-alist
+             ;;  `(("." . ,(concat user-emacs-directory "backups"))))
+             )
+    :config
+    ;; Add prompt indicator to `completing-read-multiple'.
+    ;; We display [CRM<separator>], e.g., [CRM,] if the separator is a comma.
+    (defun crm-indicator (args)
+      (cons (format "[CRM%s] %s" (replace-regexp-in-string "\\`\\[.*?]\\*\\|\\[.*?]\\*\\'" "" crm-separator)
+                    (car args))
+            (cdr args)))
+    (advice-add #'completing-read-multiple
+                :filter-args #'crm-indicator)
+
+    ;; Do not allow the cursor in the minibuffer prompt
+    (setq minibuffer-prompt-properties '(read-only t cursor-intangible t face minibuffer-prompt))
+    (add-hook 'minibuffer-setup-hook #'cursor-intangible-mode)
+
+    ;; Emacs 28: Hide commands in M-x which do not work in the current mode.
+    ;; Vertico commands are hidden in normal buffers.
+    (setq read-extended-command-predicate #'command-completion-default-include-p)
+
+    ;; Enable recursive minibuffers
+    (setq enable-recursive-minibuffers t))
+
+#+end_src
+*** No Littering
+#+begin_src elisp :tangle init.el
+  (use-package no-littering
+    :custom
+    (auto-save-file-name-transforms
+     `((".*" ,(no-littering-expand-var-file-name "auto-save/") t))))
+#+end_src
+*** Autorevert
+A buffer can get out of sync with respect to its visited file on disk if that file is changed by another program. To keep it up to date.
+#+begin_src elisp :tangle init.el
+  (use-package autorevert
+    :elpaca nil
+    :init (global-auto-revert-mode)
+    :custom ((auto-revert-interval  0.1)))
+#+end_src
+
+*** Savehist
+#+begin_src elisp :tangle init.el
+  ;; Persist history over Emacs restarts. Vertico sorts by history position.
+  (use-package savehist
+    :elpaca nil
+    :custom
+    (history-length 10000)
+    (history-delete-duplicates t)
+    (savehist-save-minibuffer-history t)
+    :init (savehist-mode))
+
+#+end_src
+*** Helpful
+#+begin_src elisp :tangle init.el
+  (use-package helpful
+    :commands (helpful-callable helpful-variable helpful-command helpful-key)
+    :bind ([remap describe-function] . helpful-callable)
+    ([remap describe-command] . helpful-command)
+    ([remap describe-variable] . helpful-variable)
+    ([remap describe-key] . helpful-key))
+#+end_src
+*** elisp-demos
+#+begin_src elisp :tangle init.el
+  (use-package elisp-demos
+    :after helpful
+    :config (advice-add 'helpful-update
+                        :after #'elisp-demos-advice-helpful-update))
+#+end_src
+
+*** Fontset
+#+begin_src elisp :tangle init.el
+  (use-package fontset
+    :elpaca nil
+    :config
+    (set-face-attribute 'default nil :font "FantasqueSansMono Nerd Font Mono"))
+#+end_src
+
+
+*** Emacs Async
+#+begin_src elisp :tangle init.el
+  (use-package async
+    :custom
+    (dired-async-message-function #'message)
+    :init
+    (dired-async-mode)
+    (async-bytecomp-package-mode))
+
+#+end_src
+*** Async Backup
+#+begin_src elisp :tangle init.el
+  (use-package async-backup
+    :demand t
+    :config
+    (add-hook 'after-save-hook #'async-backup))
+#+end_src
+
+*** Clipetty
+#+begin_src elisp :tangle init.el
+  (use-package clipetty
+    :ensure t
+    :init (global-clipetty-mode))
+#+end_src
+
+*** Xref
+#+begin_src elisp :tangle init.el
+  (use-package xref
+    :bind([remap evil-goto-definition]  . xref-find-definitions)
+    :custom
+    (xref-backend-functions '(lsp--xref-backend dumb-jump-xref-activate)))
+#+end_src
+
+*** Eldoc
+#+begin_src elisp :tangle init.el
+  (use-package eldoc
+    :custom
+    (eldoc-documentation-strategy 'eldoc-documentation-compose-eagerly)
+    (eldoc-echo-area-prefer-doc-buffer t))
+  (use-package eldoc-box
+    :commands eldoc-box-help-at-point
+    :bind ([remap evil-lookup] . eldoc-box-help-at-point))
+#+end_src
+** Editing
+*** Evil
+#+begin_src elisp :tangle init.el
+  (use-package evil
+    :demand t
+    :init
+    ;; :bind
+    ;; ([remap evil-
+    ;;         (if (> (seq-length (window-list (selected-frame))) 1)
+    ;;   (delete-window)
+    ;; (previous-buffer))
+    (evil-mode)
+    :custom
+    (evil-want-integration t)
+    (evil-want-keybinding nil)
+    (evil-want-Y-yank-to-eol t)
+    (evil-shift-width 2)
+    (evil-undo-system 'undo-redo))
+  (use-package evil-collection
+    :after evil
+    :ensure t
+    :custom
+    (evil-collection-calendar-want-org-bindings t)
+    (evil-collection-setup-minibuffer t)
+    :config
+    (evil-collection-init))
+#+end_src
+*** General
+#+begin_src elisp :tangle init.el
+  (use-package general
+    :demand t
+    :init
+    (general-evil-setup t)
+    :config
+    (general-override-mode)
+    (general-auto-unbind-keys)
+    (general-define-key
+     :keymaps 'override
+     :states '(insert normal hybrid motion visual operator emacs)
+     :prefix-map '+prefix-map
+     :prefix "SPC"
+     :global-prefix "S-SPC")
+
+    (general-create-definer global-definer
+      :wk-full-keys nil
+      :keymaps '+prefix-map)
+    (global-definer
+      "."   'find-file
+      "z"   '((lambda (local) (interactive "p")
+                (unless repeat-mode (repeat-mode))
+                (let ((local current-prefix-arg)
+                      (current-prefix-arg nil))
+                  (call-interactively (if local #'text-scale-adjust #'global-text-scale-adjust))))
+              :which-key "zoom"))
+    (general-create-definer global-leader
+      :keymaps 'override
+      :states '(insert normal hybrid motion visual operator)
+      :prefix "SPC m"
+      :non-normal-prefix "S-SPC m"
+      "" '( :ignore t
+            :which-key
+            (lambda (arg)
+              (cons (cadr (split-string (car arg) " "))
+                    (replace-regexp-in-string "-mode$" "" (symbol-name major-mode))))))
+    (defmacro +general-global-menu! (name infix-key &rest body)
+      "Create a definer named +general-global-NAME wrapping global-definer.
+                  Create prefix map: +general-global-NAME. Prefix bindings in BODY with INFIX-KEY."
+      (declare (indent 2))
+      (let* ((n (concat "+general-global-" name))
+             (prefix (intern (concat n "-map"))))
+        `(progn
+           (general-create-definer ,(intern n)
+             :wrapping global-definer
+             :prefix-map (quote ,prefix)
+             :infix ,infix-key
+             :wk-full-keys nil
+             "" '(:ignore t :which-key ,name))
+           (,(intern n) ,@body))))
+    (+general-global-menu! "application" "a"
+      "p" '(:ignore t "elpaca")
+      "pb" 'elpaca-browse
+      "pr"  '((lambda () (interactive)
+                (let ((current-prefix-arg (not current-prefix-arg)))
+                  (call-interactively #'elpaca-rebuild)))
+              :which-key "rebuild")
+      "pm" 'elpaca-manager
+      "pl" 'elpaca-log
+      "pi" '((lambda () (interactive) (info "Elpaca"))
+             :which-key "elpaca-info")
+      "ps" 'elpaca-status
+      "pt" 'elpaca-try
+      "pv" 'elpaca-visit)
+    (+general-global-menu! "buffer" "b"
+      "d"  'kill-current-buffer
+      "o" '((lambda () (interactive) (switch-to-buffer nil))
+            :which-key "other-buffer")
+      "p"  'previous-buffer
+      "r"  'rename-buffer
+      "R"  'revert-buffer
+      "M" '((lambda () (interactive) (switch-to-buffer "*Messages*"))
+            :which-key "messages-buffer")
+      "n"  'next-buffer
+      "s" '((lambda () (interactive) (switch-to-buffer "*scratch*"))
+            :which-key "scratch-buffer")
+      "TAB" '((lambda () (interactive) (switch-to-buffer nil))
+              :which-key "other-buffer"))
+    (+general-global-menu! "eval" "e"
+      "b" 'eval-buffer
+      "d" 'eval-defun
+      "e" 'eval-expression
+      "p" 'pp-eval-last-sexp
+      "s" 'eval-last-sexp)
+    (+general-global-menu! "file" "f"
+      "d"   '((lambda (&optional arg)
+                (interactive "P")
+                (let ((buffer (when arg (current-buffer))))
+                  (diff-buffer-with-file buffer))) :which-key "diff-with-file")
+      "e"   '(:ignore t :which-key "edit")
+      "ed"  '((lambda () (interactive) (find-file-existing literate-file) (widen))
+              :which-key "dotfile")
+      "eR"  '((lambda () (interactive) (load-file user-init-file))
+              :which-key "reload-init.el")
+      "et"  '((lambda ()
+                (interactive)
+                (save-restriction
+                  (widen)
+                  (org-babel-tangle-file literate-file))
+                (load-file "~/.emacs.d/init.el"))
+              :which-key "tangle/reload-init.el")
+      "l"   '((lambda (&optional arg)
+                (interactive "P")
+                (call-interactively (if arg #'find-library-other-window #'find-library)))
+              :which-key "+find-library")
+      "p"   'find-function-at-point
+      "P"   'find-function
+      "R"   'rename-file-and-buffer
+      "s"   'save-buffer
+      "v"   'find-variable-at-point
+      "V"   'find-variable)
+    (+general-global-menu! "frame" "F"
+      "D" 'delete-other-frames
+      "F" 'select-frame-by-name
+      "O" 'other-frame-prefix
+      "c" '(:ingore t :which-key "color")
+      "cb" 'set-background-color
+      "cc" 'set-cursor-color
+      "cf" 'set-foreground-color
+      "f" 'set-frame-font
+      "m" 'make-frame-on-monitor
+      "n" 'next-window-any-frame
+      "o" 'other-frame
+      "p" 'previous-window-any-frame
+      "r" 'set-frame-name)
+    (+general-global-menu! "help" "h"
+      "d"   '(:ignore t :which-key "describe")
+      "df"  'describe-function
+      "dF"  'describe-face
+      "dk"  'describe-key
+      "dt"  '((lambda () (interactive) (describe-text-properties (point)))
+              :which-key "describe-text-properties")
+      "dv"  'describe-variable
+      "h"   (general-simulate-key "C-h" :which-key "help"))
+    (+general-global-menu! "quit" "q"
+      "q" 'save-buffers-kill-emacs
+      "r" 'restart-emacs
+      "Q" 'kill-emacs)
+    (+general-global-menu! "window" "w"
+      "?" 'split-window-vertically
+      "=" 'balance-windows
+      "/" 'split-window-horizontally
+      "O" 'delete-other-windows
+      "X" '((lambda () (interactive) (call-interactively #'other-window) (kill-buffer-and-window))
+            :which-key "kill-other-buffer-and-window")
+      "d" 'delete-window
+      "h" 'windmove-left
+      "j" 'windmove-down
+      "k" 'windmove-up
+      "l" 'windmove-right
+      "o" 'other-window
+      "t" '((lambda () (interactive)
+              "toggle window dedication"
+              (set-window-dedicated-p (selected-window) (not (window-dedicated-p))))
+            :which-key "toggle window dedication")
+      "."  '(:ingore :which-key "resize")
+      ".h" '((lambda () (interactive)
+               (call-interactively (if (window-prev-sibling) #'enlarge-window-horizontally
+                                     #'shrink-window-horizontally)))
+             :which-key "divider left")
+      ".l" '((lambda () (interactive)
+               (call-interactively (if (window-next-sibling) #'enlarge-window-horizontally
+                                     #'shrink-window-horizontally)))
+             :which-key "divider right")
+      ".j" '((lambda () (interactive)
+               (call-interactively (if (window-next-sibling) #'enlarge-window #'shrink-window)))
+             :which-key "divider up")
+      ".k" '((lambda () (interactive)
+               (call-interactively (if (window-prev-sibling) #'enlarge-window #'shrink-window)))
+             :which-key "divider down")
+      "x" 'kill-buffer-and-window))
+  (elpaca-wait)
+#+end_src
+*** Which Key
+#+begin_src elisp :tangle init.el
+  (use-package which-key
+    :init
+    (which-key-mode))
+#+end_src
+*** Meow
+#+begin_src elisp
+  (use-package meow
+    :init (meow-global-mode)
+    :custom (meow-use-clipboard t)
+    :config (defun meow-setup ()
+              (setq meow-cheatsheet-layout meow-cheatsheet-layout-qwerty)
+              (meow-motion-overwrite-define-key '("j" . meow-next)
+                                                '("k" . meow-prev)
+                                                '("<escape>" . ignore))
+              (meow-leader-define-key
+               ;; SPC j/k will run the original command in MOTION state.
+               '("j" . "H-j")
+               '("k" . "H-k")
+               '("up" . windmov-up)
+               '("down" . windmov-down)
+               '("left" . windmov-left)
+               '("right" . windmov-right)
+               '("wh" . windmov-left)
+               '("wl" . windmov-right)
+               '("wk" . windmov-up)
+               '("wj" . windmov-down)
+               '("s" . split-window-vertically)
+               '("h" . split-window-horizontally)
+               '("." . find-file)
+               '("s" . "C-x C-s")
+               '("q" . "C-x C-c")
+
+               ;; Use SPC (0-9) for digit arguments.
+               '("1" . meow-digit-argument)
+               '("2" . meow-digit-argument)
+               '("3" . meow-digit-argument)
+               '("4" . meow-digit-argument)
+               '("5" . meow-digit-argument)
+               '("6" . meow-digit-argument)
+               '("7" . meow-digit-argument)
+               '("8" . meow-digit-argument)
+               '("9" . meow-digit-argument)
+               '("0" . meow-digit-argument)
+               '("/" . meow-keypad-describe-key)
+               '("?" . meow-cheatsheet))
+
+              (meow-normal-define-key '("0" . meow-expand-0)
+                                      '("9" . meow-expand-9)
+                                      '("8" . meow-expand-8)
+                                      '("7" . meow-expand-7)
+                                      '("6" . meow-expand-6)
+                                      '("5" . meow-expand-5)
+                                      '("4" . meow-expand-4)
+                                      '("3" . meow-expand-3)
+                                      '("2" . meow-expand-2)
+                                      '("1" . meow-expand-1)
+                                      '("-" . negative-argument)
+                                      '(";" . meow-reverse)
+                                      '("," . meow-inner-of-thing)
+                                      '("." . meow-bounds-of-thing)
+                                      '("[" . meow-beginning-of-thing)
+                                      '("]" . meow-end-of-thing)
+                                      '("a" . meow-append)
+                                      '("A" . meow-open-below)
+                                      '("b" . meow-back-word)
+                                      '("B" . meow-back-symbol)
+                                      '("c" . meow-change)
+                                      '("d" . meow-delete)
+                                      '("D" . meow-backward-delete)
+                                      '("e" . meow-next-word)
+                                      '("E" . meow-next-symbol)
+                                      '("f" . meow-find)
+                                      '("g" . meow-cancel-selection)
+                                      '("G" . meow-grab)
+                                      '("h" . meow-left)
+                                      '("H" . meow-left-expand)
+                                      '("i" . meow-insert)
+                                      '("I" . meow-open-above)
+                                      '("j" . meow-next)
+                                      '("J" . meow-next-expand)
+                                      '("k" . meow-prev)
+                                      '("K" . meow-prev-expand)
+                                      '("l" . meow-right)
+                                      '("L" . meow-right-expand)
+                                      '("m" . meow-join)
+                                      '("n" . meow-search)
+                                      '("o" . meow-block)
+                                      '("O" . meow-to-block)
+                                      '("p" . meow-yank)
+                                      '("q" . meow-quit)
+                                      '("Q" . meow-goto-line)
+                                      '("r" . meow-replace)
+                                      '("R" . meow-swap-grab)
+                                      '("s" . meow-kill)
+                                      '("t" . meow-till)
+                                      '("u" . meow-undo)
+                                      '("U" . meow-undo-in-selection)
+                                      '("v" . meow-visit)
+                                      '("w" . meow-mark-word)
+                                      '("W" . meow-mark-symbol)
+                                      '("x" . meow-line)
+                                      '("X" . meow-goto-line)
+                                      '("y" . meow-save)
+                                      '("Y" . meow-sync-grab)
+                                      '("z" . meow-pop-selection)
+                                      '("'" . repeat)
+                                      '("<escape>" . ignore)))
+    (meow-setup))
+
+#+end_src
+
+*** Puni
+#+begin_src elisp :tangle init.el
+
+  (use-package puni
+    :init
+    (puni-global-mode)
+    (add-hook 'term-mode-hook #'puni-disable-puni-mode))
+
+#+end_src
+
+*** Combobulate
+#+begin_src elisp :tangle init.el
+  (use-package combobulate
+    :elpaca (:host github
+                   :repo "mickeynp/combobulate")
+    :hook ((python-ts-mode . combobulate-mode)
+           (js-ts-mode . combobulate-mode)
+           (css-ts-mode . combobulate-mode)
+           (yaml-ts-mode . combobulate-mode)
+           (typescript-ts-mode . combobulate-mode)
+           (tsx-ts-mode . combobulate-mode)))
+#+end_src
+
+*** Grugru
+
+#+begin_src elisp :tangle init.el
+  (use-package grugru
+    :init (grugru-default-setup)
+    (grugru-highlight-mode))
+#+end_src
+
+*** Avy
+#+begin_src emacs-lisp :tangle init.el
+  (use-package avy)
+
+#+end_src
+** Completion
+*** Vertico
+#+begin_src elisp :tangle init.el
+  (use-package vertico
+    :elpaca (vertico :files (:defaults "extensions/*"))
+    :custom
+    (vertico-count 13)
+    (vertico-resize nil)
+    (vertico-cycle t)
+    (completion-in-region-function
+     (lambda (&rest args)
+       (apply (if vertico-mode
+                  #'consult-completion-in-region
+                #'completion--in-region)
+              args)))
+    :init
+    (vertico-mode))
+
+#+end_src
+*** Marginalia
+Enable rich annotations using the Marginalia package
+#+begin_src elisp :tangle init.el
+  (use-package marginalia
+    :general
+    (:keymaps 'minibuffer-local-map
+              "M-A" 'marginalia-cycle)
+    :custom
+    (marginalia-max-relative-age 0)
+    (marginalia-align 'right)
+
+    :init
+
+    ;; Must be in the :init section of use-package such that the mode gets
+    ;; enabled right away. Note that this forces loading the package.
+    (marginalia-mode))
+  (use-package all-the-icons-completion
+    :after (marginalia all-the-icons)
+    :hook (marginalia-mode . all-the-icons-completion-marginalia-setup)
+    :init
+    (all-the-icons-completion-mode))
+
+#+end_src
+
+*** Consult
+#+begin_src elisp :tangle init.el
+  (use-package consult
+    ;; Replace bindings. Lazily loaded due by `use-package'.
+    :bind (;; C-c bindings (mode-specific-map)
+           ("C-c M-x" . consult-mode-command)
+           ("C-c h" . consult-history)
+           ("C-c k" . consult-kmacro)
+           ("C-c m" . consult-man)
+           ("C-c i" . consult-info)
+           ([remap Info-search] . consult-info)
+           ;; C-x bindings (ctl-x-map)
+           ("C-x M-:" . consult-complex-command)     ;; orig. repeat-complex-command
+           ("C-x b" . consult-buffer)                ;; orig. switch-to-buffer
+           ("C-x 4 b" . consult-buffer-other-window) ;; orig. switch-to-buffer-other-window
+           ("C-x 5 b" . consult-buffer-other-frame)  ;; orig. switch-to-buffer-other-frame
+           ("C-x r b" . consult-bookmark)            ;; orig. bookmark-jump
+           ("C-x p b" . consult-project-buffer)      ;; orig. project-switch-to-buffer
+           ;; Custom M-# bindings for fast register access
+           ("M-#" . consult-register-load)
+           ("M-'" . consult-register-store)          ;; orig. abbrev-prefix-mark (unrelated)
+           ("C-M-#" . consult-register)
+           ;; Other custom bindings
+           ("M-y" . consult-yank-pop)                ;; orig. yank-pop
+           ;; M-g bindings (goto-map)
+           ("M-g e" . consult-compile-error)
+           ("M-g f" . consult-flymake)               ;; Alternative: consult-flycheck
+           ("M-g g" . consult-goto-line)             ;; orig. goto-line
+           ("M-g M-g" . consult-goto-line)           ;; orig. goto-line
+           ("M-g o" . consult-outline)               ;; Alternative: consult-org-heading
+           ("M-g m" . consult-mark)
+           ("M-g k" . consult-global-mark)
+           ("M-g i" . consult-imenu)
+           ("M-g I" . consult-imenu-multi)
+           ;; M-s bindings (search-map)
+           ("M-s d" . consult-find)
+           ("M-s D" . consult-locate)
+           ("M-s g" . consult-grep)
+           ("M-s G" . consult-git-grep)
+           ("M-s r" . consult-ripgrep)
+           ("M-s l" . consult-line)
+           ("M-s L" . consult-line-multi)
+           ("M-s k" . consult-keep-lines)
+           ("M-s u" . consult-focus-lines)
+           ;; Isearch integration
+           ("M-s e" . consult-isearch-history)
+           :map isearch-mode-map ("M-e" . consult-isearch-history)         ;; orig. isearch-edit-string
+           ("M-s e" . consult-isearch-history)       ;; orig. isearch-edit-string
+           ("M-s l" . consult-line)                  ;; needed by consult-line to detect isearch
+           ("M-s L" . consult-line-multi)            ;; needed by consult-line to detect isearch
+           ;; Minibuffer history
+           :map minibuffer-local-map ("M-s" . consult-history)                 ;; orig. next-matching-history-element
+           ("M-r" . consult-history))                ;; orig. previous-matching-history-element
+
+    ;; Enable automatic preview at point in the *Completions* buffer. This is
+    ;; relevant when you use the default completion UI.
+    :hook (completion-list-mode . consult-preview-at-point-mode)
+
+    ;; The :init configuration is always executed (Not lazy)
+    :init
+
+    ;; Optionally configure the register formatting. This improves the register
+    ;; preview for `consult-register', `consult-register-load',
+    ;; `consult-register-store' and the Emacs built-ins.
+    (setq register-preview-delay 0.5 register-preview-function #'consult-register-format)
+
+    ;; Optionally tweak the register preview window.
+    ;; This adds thin lines, sorting and hides the mode line of the window.
+    (advice-add #'register-preview
+                :override #'consult-register-window)
+
+    ;; Use Consult to select xref locations with preview
+    (setq xref-show-xrefs-function #'consult-xref xref-show-definitions-function #'consult-xref)
+
+    ;; Configure other variables and modes in the :config section,
+    ;; after lazily loading the package.
+    :config
+
+    ;; Optionally configure preview. The default value
+    ;; is 'any, such that any key triggers the preview.
+    ;; (setq consult-preview-key 'any)
+    ;; (setq consult-preview-key "M-.")
+    ;; (setq consult-preview-key '("S-<down>" "S-<up>"))
+    ;; For some commands and buffer sources it is useful to configure the
+    ;; :preview-key on a per-command basis using the `consult-customize' macro.
+    (consult-customize consult-theme
+                       :preview-key '(:debounce 0.2 any)
+                       consult-ripgrep consult-git-grep consult-grep consult-bookmark consult-recent-file consult-xref consult--source-bookmark consult--source-file-register consult--source-recent-file consult--source-project-recent-file
+                       ;; :preview-key "M-."
+                       :preview-key '(:debounce 0.4 any))
+
+    ;; Optionally configure the narrowing key.
+    ;; Both < and C-+ work reasonably well.
+    (setq consult-narrow-key "<") ;; "C-+"
+
+    ;; Optionally make narrowing help available in the minibuffer.
+    ;; You may want to use `embark-prefix-help-command' or which-key instead.
+    ;; (define-key consult-narrow-map (vconcat consult-narrow-key "?") #'consult-narrow-help)
+
+    ;; By default `consult-project-function' uses `project-root' from project.el.
+    ;; Optionally configure a different project root function.
+  ;;;; 1. project.el (the default)
+    ;;(setq consult-project-function #'consult--default-project--function)
+  ;;;; 2. vc.el (vc-root-dir)
+    ;; (setq consult-project-function (lambda (_) (vc-root-dir)))
+  ;;;; 3. locate-dominating-file
+    ;; (setq consult-project-function (lambda (_) (locate-dominating-file "." ".git")))
+  ;;;; 4. projectile.el (projectile-project-root)
+    ;; (autoload 'projectile-project-root "projectile")
+    ;; (setq consult-project-function (lambda (_) (projectile-project-root)))
+  ;;;; 5. No project support
+    ;; (setq consult-project-function nil)
+    )
+
+#+end_src
+
+*** Embark
+#+begin_src elisp :tangle init.el
+  (use-package embark
+    :bind (("C-." . embark-act)         ;; pick some comfortable binding
+           ("C-;" . embark-dwim)        ;; good alternative: M-.
+           ("C-h B" . embark-bindings)) ;; alternative for `describe-bindings'
+    :init
+
+    ;; Optionally replace the key help with a completing-read interface
+    (setq prefix-help-command #'embark-prefix-help-command)
+    :config
+
+    ;; Hide the mode line of the Embark live/completions buffers
+    (add-to-list 'display-buffer-alist '("\\`\\*Embark Collect \\(Live\\|Completions\\)\\*" nil (window-parameters (mode-line-format . none)))))
+
+  ;; Consult users will also want the embark-consult package.
+  (use-package embark-consult
+    :hook (embark-collect-mode . consult-preview-at-point-mode))
+
+#+end_src
+
+*** Orderless
+#+begin_src elisp :tangle init.el
+  (use-package orderless
+    :demand t
+    :config
+    (defun +orderless--consult-suffix () "Regexp which matches the end of string with Consult tofu support." (if (and (boundp 'consult--tofu-char)
+                                                                                                                      (boundp 'consult--tofu-range))
+                                                                                                                 (format "[%c-%c]*$" consult--tofu-char (+ consult--tofu-char consult--tofu-range -1)) "$"))
+
+    ;; Recognizes the following patterns:
+    ;; * .ext (file extension)
+    ;; * regexp$ (regexp matching at end)
+    (defun +orderless-consult-dispatch (word _index _total)
+      (cond
+       ;; Ensure that $ works with Consult commands, which add disambiguation suffixes
+       ((string-suffix-p "$" word)
+        `(orderless-regexp . ,(concat (substring word 0 -1)
+                                      (+orderless--consult-suffix))))
+       ;; File extensions
+       ((and (or minibuffer-completing-file-name (derived-mode-p 'eshell-mode))
+             (string-match-p "\\`\\.." word))
+        `(orderless-regexp . ,(concat "\\." (substring word 1)
+                                      (+orderless--consult-suffix))))))
+
+    ;; Define orderless style with initialism by default
+    (orderless-define-completion-style +orderless-with-initialism (orderless-matching-styles '(orderless-initialism orderless-literal orderless-regexp)))
+
+    ;; You may want to combine the `orderless` style with `substring` and/or `basic`.
+    ;; There are many details to consider, but the following configurations all work well.
+    ;; Personally I (@minad) use option 3 currently. Also note that you may want to configure
+    ;; special styles for special completion categories, e.g., partial-completion for files.
+    ;;
+    ;; 1. (setq completion-styles '(orderless))
+    ;; This configuration results in a very coherent completion experience,
+    ;; since orderless is used always and exclusively. But it may not work
+    ;; in all scenarios. Prefix expansion with TAB is not possible.
+    ;;
+    ;; 2. (setq completion-styles '(substring orderless))
+    ;; By trying substring before orderless, TAB expansion is possible.
+    ;; The downside is that you can observe the switch from substring to orderless
+    ;; during completion, less coherent.
+    ;;
+    ;; 3. (setq completion-styles '(orderless basic))
+    ;; Certain dynamic completion tables (completion-table-dynamic)
+    ;; do not work properly with orderless. One can add basic as a fallback.
+    ;; Basic will only be used when orderless fails, which happens only for
+    ;; these special tables.
+    ;;
+    ;; 4. (setq completion-styles '(substring orderless basic))
+    ;; Combine substring, orderless and basic.
+    ;;
+    (setq completion-styles '(orderless basic) completion-category-defaults nil
+        ;;; Enable partial-completion for files.
+        ;;; Either give orderless precedence or partial-completion.
+        ;;; Note that completion-category-overrides is not really an override,
+        ;;; but rather prepended to the default completion-styles.
+          ;; completion-category-overrides '((file (styles orderless partial-completion))) ;; orderless is tried first
+          completion-category-overrides '((file (styles partial-completion)) ;; partial-completion is tried first
+                                          ;; enable initialism by default for symbols
+                                          (command (styles +orderless-with-initialism))
+                                          (variable (styles +orderless-with-initialism))
+                                          (symbol (styles +orderless-with-initialism))) orderless-component-separator #'orderless-escapable-split-on-space ;; allow escaping space with backslash!
+          orderless-style-dispatchers (list #'+orderless-consult-dispatch #'orderless-affix-dispatch))
+    (defun consult--orderless-regexp-compiler (input type &rest _config)
+      (setq input (orderless-pattern-compiler input))
+      (cons (mapcar (lambda (r)
+                      (consult--convert-regexp r type)) input)
+            (lambda (str)
+              (orderless--highlight input str))))
+
+    ;; OPTION 1: Activate globally for all consult-grep/ripgrep/find/...
+    ;; (setq consult--regexp-compiler #'consult--orderless-regexp-compiler)
+
+    ;; OPTION 2: Activate only for some commands, e.g., consult-ripgrep!
+    (defun consult--with-orderless (&rest args)
+      (minibuffer-with-setup-hook (lambda ()
+                                    (setq-local consult--regexp-compiler #'consult--orderless-regexp-compiler))
+        (apply args)))
+    (advice-add #'consult-ripgrep
+                :around #'consult--with-orderless))
+
+#+end_src
+
+** UI Encanhement
+*** Theme
+#+begin_src emacs-lisp :tangle init.el
+    (use-package ef-themes
+      :config
+      (load-theme 'ef-frost :no-confirm)
+  ;;     (ef-themes-load-random 'dark)
+   )
+#+end_src
+*** Transwin
+#+begin_src elisp :tangle init.el
+  (use-package transwin)
+#+end_src
+*** Mode-Line
+#+begin_src elisp :tangle init.el
+  (use-package lambda-line
+    :elpaca (:host github
+                   :repo "lambda-emacs/lambda-line")
+    :init
+    ;; activate lambda-line
+    (lambda-line-mode)
+    :custom (lambda-line-icon-time t) ;; requires ClockFace font (see below)
+    (lambda-line-clockface-update-fontset "ClockFaceRect") ;; set clock icon
+    (lambda-line-position 'top) ;; Set position of status-line
+    (lambda-line-abbrev t) ;; abbreviate major modes
+    (lambda-line-hspace "  ")  ;; add some cushion
+    (lambda-line-prefix t) ;; use a prefix symbol
+    (lambda-line-prefix-padding nil) ;; no extra space for prefix
+    (lambda-line-status-invert nil)  ;; no invert colors
+    (lambda-line-gui-ro-symbol  " ⨂") ;; symbols
+    (lambda-line-gui-mod-symbol " ⬤")
+    (lambda-line-gui-rw-symbol  " ◯")
+    (lambda-line-space-top +.50)  ;; padding on top and bottom of line
+    (lambda-line-space-bottom -.50)
+    (lambda-line-symbol-position 0.1) ;; adjust the vertical placement of symbol
+    :config
+    ;; set divider line in footer
+    (when (eq lambda-line-position 'top)
+      (setq-default mode-line-format (list "%_"))
+      (setq mode-line-format (list "%_"))))
+  (use-package hide-mode-line
+    :init
+    (global-hide-mode-line-mode))
+#+end_src
+
+*** Icons
+#+begin_src elisp :tangle init.el
+  (use-package all-the-icons)
+  (use-package nerd-fonts
+    :defer t
+    :elpaca (:host github :repo "mohkale/nerd-fonts.el"))
+  (use-package all-the-icons-nerd-fonts
+    :elpaca (:host github :repo "mohkale/all-the-icons-nerd-fonts")
+    :after all-the-icons
+    :demand t
+    :config
+    (all-the-icons-nerd-fonts-prefer))
+#+end_src
+
+*** Map
+#+begin_src elisp :tangle init.el
+  (use-package demap
+    :commands demap-toggle)
+#+end_src
+
+*** Dimmer
+#+begin_src elisp :tangle init.el
+  (use-package dimmer
+    :init
+    (dimmer-configure-magit)
+    (dimmer-configure-which-key)
+    (dimmer-mode))
+#+end_src
+
+*** Zoom
+#+begin_src elisp :tangle init.el
+  (use-package zoom
+    :init
+    (zoom-mode)
+    :custom
+    (zoom-size '(0.618 . 0.618))
+    (temp-buffer-resize-mode t)
+    (zoom-ignored-major-modes '(dired-mode markdown-mode
+                                           Custom-mode
+                                           eshell-mode
+                                           shell-mode
+                                           help-mode
+                                           grep-mode
+                                           special-mode
+                                           term-mode
+                                           helpful-mode
+                                           vterm-mode
+                                           compilation-mode))
+    (zoom-ignored-buffer-name-regexps '("\\*Messages\\*"
+                                        "Output\\*$"
+                                        "\\*Async Shell Command\\*"
+                                        "^\\*eshell.*\\*$"
+                                        "^\\*shell.*\\*$"
+
+                                        "^\\*vterminal.*\\*$"
+                                        "^\\*term.*\\*$"
+                                        "^\\*vterm.*\\*$")))
+#+end_src
+*** shackle
+#+begin_src elisp 
+  (use-package shackle
+    :init
+    (shackle-mode)
+    :custom
+    (shackle-rules
+     '((
+        "\\*Messages\\*"
+        "Output\\*$"
+        "\\*Async Shell Command\\*"
+        help-mode
+        helpful-mode
+        compilation-mode
+        special-mode
+        Custom-mode
+        grep-mode
+        "^\\*eshell.*\\*$"
+        "^\\*shell.*\\*$"
+        "^\\*term.*\\*$"
+        "^\\*vterm.*\\*$"
+        :select t
+        :popup t :align "below"
+        )
+       ))
+    (shackle-default-size 0.4)
+    (shackle-inhibit-window-quit-on-same-windows t))
+#+end_src
+*** Popper
+#+begin_src elisp :tangle init.el
+  (use-package popper
+    :bind (("C-`"   . popper-toggle-latest)
+           ("M-`"   . popper-cycle)
+           ("C-M-`" . popper-toggle-type))
+    :custom
+    (popper-reference-buffers
+     '(
+       "\\*Messages\\*"
+       "Output\\*$"
+       "\\*Async Shell Command\\*"
+       help-mode
+       helpful-mode
+       compilation-mode
+       special-mode
+       Custom-mode
+       grep-mode
+       "^\\*eshell.*\\*$" eshell-mode ;eshell as a popup
+       "^\\*shell.*\\*$"  shell-mode  ;shell as a popup
+       "^\\*term.*\\*$"   term-mode   ;term as a popup
+       "^\\*vterm.*\\*$"  vterm-mode  ;vterm as a popup
+       "^\\*vterminal.*\\*$"
+       ))
+    (popper-group-function #'popper-group-by-project)
+    :init
+    (popper-mode +1)
+    (popper-echo-mode +1))                ; For echo area hints
+#+end_src
+*** Ligature
+#+begin_src elisp :tangle init.el
+  (use-package ligature
+    :config
+    ;; Enable the "www" ligature in every possible major mode
+    (ligature-set-ligatures 't '("www"))
+    ;; Enable traditional ligature support in eww-mode, if the
+    ;; `variable-pitch' face supports it
+    (ligature-set-ligatures 'eww-mode '("ff" "fi" "ffi"))
+    ;; Enable all Cascadia Code ligatures in programming modes
+    (ligature-set-ligatures 'prog-mode '("|||>" "<|||" "<==>" "<!--" "####" "~~>" "***" "||=" "||>"
+                                         ":::" "::=" "=:=" "===" "==>" "=!=" "=>>" "=<<" "=/=" "!=="
+                                         "!!." ">=>" ">>=" ">>>" ">>-" ">->" "->>" "-->" "---" "-<<"
+                                         "<~~" "<~>" "<*>" "<||" "<|>" "<$>" "<==" "<=>" "<=<" "<->"
+                                         "<--" "<-<" "<<=" "<<-" "<<<" "<+>" "</>" "###" "#_(" "..<"
+                                         "..." "+++" "/==" "///" "_|_" "www" "&&" "^=" "~~" "~@" "~="
+                                         "~>" "~-" "**" "*>" "*/" "||" "|}" "|]" "|=" "|>" "|-" "{|"
+                                         "[|" "]#" "::" ":=" ":>" ":<" "$>" "==" "=>" "!=" "!!" ">:"
+                                         ">=" ">>" ">-" "-~" "-|" "->" "--" "-<" "<~" "<*" "<|" "<:"
+                                         "<$" "<=" "<>" "<-" "<<" "<+" "</" "#{" "#[" "#:" "#=" "#!"
+                                         "##" "#(" "#?" "#_" "%%" ".=" ".-" ".." ".?" "+>" "++" "?:"
+                                         "?=" "?." "??" ";;" "/*" "/=" "/>" "//" "__" "~~" "(*" "*)"
+                                         "\\\\" "://"))
+    ;; Enables ligature checks globally in all buffers. You can also do it
+    ;; per mode with `ligature-mode'.
+    (global-ligature-mode t))
+#+end_src
+*** Sideline
+#+begin_src elisp :tangle init.el
+  (use-package sideline
+    :init
+    (global-sideline-mode)
+    :custom
+    ;; (sideline-backends-left '((sideline-blame . down)))
+    (sideline-backends-right '(sideline-flycheck sideline-color)))
+  (use-package sideline-flycheck :hook (flycheck-mode . sideline-flycheck-setup))
+  ;; (use-package sideline-blame)
+  (use-package sideline-color :elpaca (:host github :repo "emacs-sideline/sideline-color"))
+  (use-package sideline-lsp)
+
+#+end_src
+** Tools
+*** Org MOde
+**** Org Modren
+#+begin_src elisp :tangle init.el
+  (use-package org
+    :custom
+    (org-agenda-files '("~/Documents/org/agenda.org")))
+  (use-package org-modern
+    :hook (org-mode . org-modern-mode))
+#+end_src
+*** Vterm
+#+begin_src elisp :tangle init.el
+  (use-package vterm)
+  (use-package multi-vterm
+    :custom
+    (multi-vterm-dedicated-window-height-percent 30)
+    :config
+    (add-hook 'vterm-mode-hook
+              (lambda ()
+                (setq-local evil-insert-state-cursor 'box)
+                (evil-insert-state)))
+    (define-key vterm-mode-map [return]                      #'vterm-send-return)
+
+    (setq vterm-keymap-exceptions nil)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-e")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-f")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-a")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-v")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-b")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-w")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-u")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-d")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-n")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-m")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-p")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-j")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-k")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-r")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-t")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-g")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-c")      #'vterm--self-insert)
+    (evil-define-key 'insert vterm-mode-map (kbd "C-SPC")    #'vterm--self-insert)
+    (evil-define-key 'normal vterm-mode-map (kbd "C-d")      #'vterm--self-insert)
+    (evil-define-key 'normal vterm-mode-map (kbd ",c")       #'multi-vterm)
+    (evil-define-key 'normal vterm-mode-map (kbd ",n")       #'multi-vterm-next)
+    (evil-define-key 'normal vterm-mode-map (kbd ",p")       #'multi-vterm-prev)
+    (evil-define-key 'normal vterm-mode-map (kbd "i")        #'evil-insert-resume)
+    (evil-define-key 'normal vterm-mode-map (kbd "o")        #'evil-insert-resume)
+    (evil-define-key 'normal vterm-mode-map (kbd "<return>") #'evil-insert-resume))
+#+end_src
+
+*** Syntax Checker
+**** Flycheck
+#+begin_src elisp :tangle init.el
+  (use-package flycheck
+    :init (global-flycheck-mode))
+#+end_src
+
+*** Auto Save
+#+begin_src elisp :tangle init.el
+  (use-package real-auto-save
+    :custom
+    (real-auto-save-interval 5)
+    :init
+    (real-auto-save-mode))
+#+end_src
+*** Syntax Highlighting
+#+begin_src elisp :tangle init.el
+  (use-package treesit-auto
+    :init
+    (global-treesit-auto-mode)
+    :config
+    (setq treesit-auto-install 't))
+#+end_src
+*** Direnv
+#+begin_src elisp :tangle init.el
+  (use-package direnv
+    :init
+    (direnv-mode))
+#+end_src
+*** Formatter
+#+begin_src elisp :tangle init.el
+  (use-package apheleia
+    :init
+    (apheleia-global-mode))
+#+end_src
+
+*** Completion
+#+begin_src elisp :tangle init.el
+  (use-package company
+    :init
+    (global-company-mode)
+    :custom
+    (company-idle-delay 0)
+    (company-tooltip-idle-delay 2)
+    (company-tooltip-align-annotations t)
+    (company-tooltip-limit 5)
+    (company-tooltip-minimum 5)
+    (company-tooltip-flip-when-above t)
+    (company-text-icons-add-background t)
+    (company-dabbrev-other-buffers t)
+    (company-backends '((company-capf company-dabbrev-code company-wordfreq :with company-yasnippet :separate)  company-files))
+    :config
+    (company-tng-configure-default))
+
+
+#+end_src
+**** Box
+#+begin_src emacs-lisp :tangle init.el
+  (use-package company-box
+    :hook (company-mode . company-box-mode))
+#+end_src
+**** QuickHelp
+#+begin_src elisp 
+  (use-package company-quickhelp
+    :after company-mode
+    :init (company-quickhelp-mode))
+#+end_src
+**** Word Frequency
+#+begin_src elisp :tangle init.el
+  (use-package company-wordfreq)
+#+end_src
+**** Statistics
+#+begin_src elisp :tangle init.el
+  (use-package company-statistics
+    :init
+    (company-statistics-mode))
+#+end_src
+*** Snippet
+#+begin_src elisp :tangle init.el
+  (use-package yasnippet
+    :init
+    (yas-global-mode))
+#+end_src
+**** Collection
+
+#+begin_src elisp :tangle init.el
+  (use-package yasnippet-snippets)
+#+end_src
+
+**** Template
+
+#+begin_src elisp :tangle init.el
+  (use-package yatemplate)
+#+end_src
+*** Languages
+**** Code Completion
+#+begin_src elisp :tangle init.el
+  (use-package lsp-mode
+    :commands lsp
+    :custom
+    (lsp-auto-execute-action t)
+    (lsp-auto-guess-root t)
+    (lsp-debounce-full-sync-notifications-interval 0.1)
+    (lsp-eldoc-render-all t)
+    (lsp-enable-suggest-server-download nil)
+    (lsp-file-watch-threshold 5000)
+    (lsp-lens-place-position 'above-line)
+    (lsp-completion-provider :none)
+    :config
+    (add-to-list 'sideline-backends-right 'sideline-lsp))
+#+end_src
+**** Jump to Defection
+#+begin_src elisp :tangle init.el
+  (use-package dumb-jump
+    :demand t
+    :custom
+    (dumb-jump-force-searcher 'rg)
+    :config
+    (add-hook 'xref-backend-functions #'dumb-jump-xref-activate))
+#+end_src
+**** Elixir
+#+begin_src elisp :tangle init.el
+  (use-package elixir-ts-mode
+    :hook (elixir-ts-mode . lsp)
+    :custom
+    (lsp-elixir-fetch-deps t)
+    (lsp-elixir-server-command '("elixir-ls"))
+    :config
+    (append treesit-language-source-alist
+            '((elixir . ("https://github.com/elixir-lang/tree-sitter-elixir.git"))
+              (heex . ("https://github.com/phoenixframework/tree-sitter-heex.git"))))
+    (setq lsp-language-id-configuration
+          (append lsp-language-id-configuration
+                  '((elixir-ts-mode . "elixir")
+                    (heex-ts-mode . "elixir"))))
+    (global-subword-mode t))
+  (use-package heex-ts-mode
+    :hook (heex-ts-mode . lsp))
+#+end_src
+***** Checker
+#+begin_src elisp :tangle init.el
+  (use-package flycheck-credo
+    :init
+    (flycheck-dialyxir-setup))
+  (use-package flycheck-dialyxir
+    :init
+    (flycheck-dialyxir-setup))
+#+end_src
+**** Nix
+#+begin_src emacs-lisp :tangle init.el
+  (use-package nix-mode)
+#+end_src
+**** Svelte
+#+begin_src elisp :tangle init.el
+  (use-package svelte-mode
+    :hook (svelte-mode . lsp)
+    :custom
+    (svelte-basic-offset 2))
+#+end_src
+**** Html
+#+begin_src emacs-lisp :tangle init.el
+  (use-package html-mode
+    :elpaca nil
+    :hook (html-ts-mode . lsp))
+#+end_src
+**** CSS
+#+begin_src emacs-lisp :tangle init.el
+  (use-package css-mode
+    :elpaca nil
+    :hook (css-ts-mode . lsp))
+#+end_src
+
+**** JS
+#+begin_src emacs-lisp :tangle init.el
+  (use-package js
+    :elpaca nil
+    :hook (js-ts-mode .lsp))
+#+end_src
+**** TS
+#+begin_src emacs-lisp :tangle init.el
+  (use-package typescript-ts-mode
+    :elpaca nil
+    :hook (typescript-ts-mode . lsp))
+#+end_src
+**** PHP
+#+begin_src emacs-lisp :tangle init.el
+  (use-package php-mode
+    :hook (php-mode . lsp))
+#+end_src
+**** Blade
+#+begin_src emacs-lisp :tangle init.el
+  (use-package web-mode
+    :defer 2)
+#+end_src
+*** Project
+#+begin_src elisp :tangle init.el
+  (use-package project
+    :elpaca nil
+    :custom
+    (project-vc-extra-root-markers
+     '("mix.exs" "package.json" ".git" "composer.json"
+       "Cargo.toml" "compile_commands.json" "compile_flags.txt"  
+       "project.clj"  "deps.edn" "shadow-cljs.edn"  "pom.xml" "*.csproj"))
+    (project-vc-ignores '("target/" "bin/" "obj/"))
+    :config
+
+    (defun project-save-some-buffers (&optional arg)
+      "Save some modified file-visiting buffers in the current project.
+
+  Optional argument ARG (interactively, prefix argument) non-nil
+  means save all with no questions."
+      (interactive "P")
+      (let* ((project-buffers (project-buffers (project-current)))
+             (pred (lambda () (memq (current-buffer) project-buffers))))
+        (funcall-interactively #'save-some-buffers arg pred)))
+    (define-advice project-compile (:around (fn) save-project-buffers)
+      "Only ask to save project-related buffers."
+      (let* ((project-buffers (project-buffers (project-current)))
+             (compilation-save-buffers-predicate
+              (lambda () (memq (current-buffer) project-buffers))))
+        (funcall fn)))
+    (define-advice recompile (:around (fn &optional edit-command) save-project-buffers)
+      "Only ask to save project-related buffers if inside a project."
+      (if (project-current)
+          (let* ((project-buffers (project-buffers (project-current)))
+                 (compilation-save-buffers-predicate
+                  (lambda () (memq (current-buffer) project-buffers))))
+            (funcall fn edit-command))
+        (funcall fn edit-command))))
+
+  (use-package consult-project-extra
+    :bind
+    (("C-c p f" . consult-project-extra-find)
+     ("C-c p o" . consult-project-extra-find-other-window)))
+#+end_src
+*** Magit
+#+begin_src emacs-lisp :tangle init.el
+  (use-package magit)
+#+end_src
+*** Wgrep
+#+begin_src emacs-lisp :tangle init.el
+  (use-package wgrep
+    :custom
+    (wgrep-auto-save-buffer t))
+#+end_src
+*** Dirvish
+#+begin_src emacs-lisp :tangle init.el
+
+  (use-package dirvish
+    :init
+    (dirvish-override-dired-mode)
+    (dirvish-side-follow-mode)
+    :custom
+    (dirvish-subtree-always-show-state t)
+    (dired-mouse-drag-files t)
+    (dirvish-side-width 25)
+    (dirvish-side-display-alist '((side . right)
+                                  (slot . -1)))
+    (mouse-drag-and-drop-region-cross-program t)
+    (delete-by-moving-to-trash t)
+    (dired-listing-switches
+     "-l --almost-all --human-readable --group-directories-first --no-group")
+    (dirvish-attributes
+     '(all-the-icons file-time file-size collapse subtree-state vc-state git-msg))
+    (dirvish-mode-line-format
+     '(:left (sort symlink) :right (omit yank index)))
+    (dirvish-quick-access-entries ; It's a custom option, `setq' won't work
+     '(("h" "~/"                          "Home")
+       ("d" "~/Downloads/"                "Downloads")
+       ("m" "/mnt/"                       "Drives")
+       ("t" "~/.local/share/Trash/files/" "TrashCan")))
+    (dired-auto-revert-buffer t)
+    :config
+    ;; (dirvish-peek-mode) ; Preview files in minibuffer
+    ;; (dirvish-side-follow-mode) ; similar to `treemacs-follow-mode'
+    :bind ; Bind `dirvish|dirvish-side|dirvish-dwim' as you see fit
+    (("C-c f" . dirvish-fd)
+     :map dirvish-mode-map ; Dirvish inherits `dired-mode-map'
+     ("a"   . dirvish-quick-access)
+     ("f"   . dirvish-file-info-menu)
+     ("y"   . dirvish-yank-menu)
+     ("N"   . dirvish-narrow)
+     ("^"   . dirvish-history-last)
+     ("h"   . dirvish-history-jump) ; remapped `describe-mode'
+     ("s"   . dirvish-quicksort)    ; remapped `dired-sort-toggle-or-edit'
+     ("v"   . dirvish-vc-menu)      ; remapped `dired-view-file'
+     ("TAB" . dirvish-subtree-toggle)
+     ("M-f" . dirvish-history-go-forward)
+     ("M-b" . dirvish-history-go-backward)
+     ("M-l" . dirvish-ls-switches-menu)
+     ("M-m" . dirvish-mark-menu)
+     ("M-t" . dirvish-layout-toggle)
+     ("M-s" . dirvish-setup-menu)
+     ("M-e" . dirvish-emerge-menu)
+     ("M-j" . dirvish-fd-jump)))
+#+end_src
+*** Elfeed
+#+begin_src emacs-lisp :tangle init.el
+  (use-package elfeed)
+  (use-package elfeed-org
+    :init
+    (elfeed-org)
+    :custom
+    (rmh-elfeed-org-files (list (concat user-emacs-directory "elfeed.org"))))
+#+end_src
+*** Translation
+#+begin_src emacs-lisp :tangle init.el
+  (use-package go-translate
+    :custom
+    (gts-translate-list '(("en" "ar")))
+
+
+    (gts-default-translator
+     (gts-translator
+      :picker (gts-prompt-picker)
+      :engines (list (gts-bing-engine) (gts-google-engine))
+      :render (gts-buffer-render))))
+#+end_src
+
+*** Olivetti
+#+begin_src emacs-lisp :tangle init.el
+  (use-package olivetti)
+#+end_src
+
+*** Zk
+#+begin_src emacs-lisp :tangle init.el
+
+  (use-package zk
+    :elpaca (zk :files (:defaults "zk-consult.el"))
+    :custom
+    (zk-directory "~/Document/org/zk")
+    (zk-file-extension "org")
+    :config
+    (require 'zk-consult)
+    (zk-setup-auto-link-buttons)
+    (zk-setup-embark)
+    (setq zk-tag-grep-function #'zk-consult-grep-tag-search
+          zk-grep-function #'zk-consult-grep))
+#+end_src
+*** Beframe
+#+begin_src emacs-lisp :tangle init.el
+  (use-package beframe
+    :init
+    (beframe-mode)
+    :custom
+    (beframe-functions-in-frames '(project-prompt-project-dir))
+    :config
+    (defvar beframe--consult-source
+      `( :name     "Frame-specific buffers (current frame)"
+         :narrow   ?F
+         :category buffer
+         :face     beframe-buffer
+         :history  beframe-history
+         :items    ,#'beframe--buffer-names
+         :action   ,#'switch-to-buffer
+         :state    ,#'consult--buffer-state))
+
+    (add-to-list 'consult-buffer-sources 'beframe--consult-source))
+
+#+end_src
+** END
+#+begin_src elisp :tangle init.el
+  ;; Don't install anything. Defer execution of BODY
+  (elpaca nil (message "deferred"))
+
+  ;; Local Variables:
+  ;; no-byte-compile: t
+  ;; no-native-compile: t
+  ;; no-update-autoloads: t
+  ;; End:
+  (provide 'init)
+  ;;; init.el ends here
+
+#+end_src
