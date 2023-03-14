@@ -251,18 +251,18 @@ A buffer can get out of sync with respect to its visited file on disk if that fi
   (use-package evil
     :demand t
     :init
-    ;; :bind
-    ;; ([remap evil-
-    ;;         (if (> (seq-length (window-list (selected-frame))) 1)
-    ;;   (delete-window)
-    ;; (previous-buffer))
     (evil-mode)
     :custom
     (evil-want-integration t)
     (evil-want-keybinding nil)
     (evil-want-Y-yank-to-eol t)
     (evil-shift-width 2)
-    (evil-undo-system 'undo-redo))
+    (evil-undo-system 'undo-redo)
+    :config
+    (dolist (p '((minibuffer-inactive-mode . emacs)
+                 (minibuffer-mode . emacs)
+                 (dired-mode . emacs)))
+      (evil-set-initial-state (car p) (cdr p))))
   (use-package evil-collection
     :after evil
     :ensure t
@@ -861,11 +861,11 @@ Enable rich annotations using the Marginalia package
 ** UI Encanhement
 *** Theme
 #+begin_src emacs-lisp :tangle init.el
-    (use-package ef-themes
-      :config
-      (load-theme 'ef-frost :no-confirm)
-  ;;     (ef-themes-load-random 'dark)
-   )
+  (use-package ef-themes
+    :config
+    (load-theme 'ef-frost :no-confirm)
+    ;;     (ef-themes-load-random 'dark)
+    )
 #+end_src
 *** Transwin
 #+begin_src elisp :tangle init.el
@@ -955,6 +955,7 @@ Enable rich annotations using the Marginalia package
                                         "Output\\*$"
                                         "\\*Async Shell Command\\*"
                                         "^\\*eshell.*\\*$"
+                                        "\\*Go-Translate\\*"
                                         "^\\*shell.*\\*$"
 
                                         "^\\*vterminal.*\\*$"
@@ -981,6 +982,7 @@ Enable rich annotations using the Marginalia package
         "^\\*eshell.*\\*$"
         "^\\*shell.*\\*$"
         "^\\*term.*\\*$"
+        "\\*Go-Translate\\*"
         "^\\*vterm.*\\*$"
         :select t
         :popup t :align "below"
@@ -1004,6 +1006,7 @@ Enable rich annotations using the Marginalia package
        help-mode
        helpful-mode
        compilation-mode
+       "\\*Go-Translate\\*"
        special-mode
        Custom-mode
        grep-mode
@@ -1433,25 +1436,42 @@ Enable rich annotations using the Marginalia package
 #+begin_src emacs-lisp :tangle init.el
   (use-package olivetti)
 #+end_src
+*** Roam
 
-*** Zk
 #+begin_src emacs-lisp :tangle init.el
-
-  (use-package zk
-    :elpaca (zk :files (:defaults "zk-consult.el"))
+  (use-package org-roam
+    :ensure t
     :custom
-    (zk-directory "~/Document/org/zk")
-    (zk-file-extension "org")
+    (org-roam-directory (file-truename "~/Documents/org/roam"))
+    :bind (("C-c n l" . org-roam-buffer-toggle)
+           ("C-c n f" . org-roam-node-find)
+           ("C-c n g" . org-roam-graph)
+           ("C-c n i" . org-roam-node-insert)
+           ("C-c n c" . org-roam-capture)
+           ;; Dailies
+           ("C-c n j" . org-roam-dailies-capture-today))
     :config
-    (require 'zk-consult)
-    (zk-setup-auto-link-buttons)
-    (zk-setup-embark)
-    (setq zk-tag-grep-function #'zk-consult-grep-tag-search
-          zk-grep-function #'zk-consult-grep))
+    ;; If you're using a vertical completion framework, you might want a more informative completion interface
+    (setq org-roam-node-display-template (concat "${title:*} " (propertize "${tags:10}" 'face 'org-tag)))
+    (org-roam-db-autosync-mode)
+    ;; If using org-roam-protocol
+    (require 'org-roam-protocol))
+
+(use-package websocket
+    :after org-roam)
+
+(use-package org-roam-ui
+    :after org-roam ;; or :after org
+    :custom
+    (org-roam-ui-sync-theme t
+          org-roam-ui-follow t
+          org-roam-ui-update-on-save t
+          org-roam-ui-open-on-start t))
 #+end_src
 *** Beframe
 #+begin_src emacs-lisp :tangle init.el
   (use-package beframe
+    :after consult
     :init
     (beframe-mode)
     :custom
@@ -1466,9 +1486,47 @@ Enable rich annotations using the Marginalia package
          :items    ,#'beframe--buffer-names
          :action   ,#'switch-to-buffer
          :state    ,#'consult--buffer-state))
-
     (add-to-list 'consult-buffer-sources 'beframe--consult-source))
 
+#+end_src
+
+*** TODO: Shrface
+#+begin_src emacs-lisp 
+  (use-package shrface
+    :hook
+    (eww-after-render  . shrface-mode) 
+    (nov-mode . shrface-mode)
+    :custom
+    (shrface-href-versatile t)
+    (shrface-bullets-bullet-list '("◉" "○" "◈" "◇" "✳"))
+    :config
+
+    (shrface-basic)
+    (shrface-trial)
+    (shrface-default-keybindings) ; setup default keybindings
+    )
+  (use-package shr-tag-pre-highlight
+    :after (shr eww)
+    :config
+    (add-to-list 'shr-external-rendering-functions
+                 '(pre . shr-tag-pre-highlight))
+    (advice-add 'eww-display-html :around
+                'eww-display-html--override-shr-external-rendering-functions))
+
+
+  (use-package nov
+    :defer t
+    :config
+    (setq nov-shr-rendering-functions '((img . nov-render-img) (title . nov-render-title)))
+    (setq nov-shr-rendering-functions (append nov-shr-rendering-functions shr-external-rendering-functions)))
+
+
+#+end_src
+
+
+#+begin_src emacs-lisp :tangle init.el
+  (use-package sudo-edit
+    :commands sudo-edit)
 #+end_src
 ** END
 #+begin_src elisp :tangle init.el
