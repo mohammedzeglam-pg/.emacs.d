@@ -861,11 +861,14 @@ Enable rich annotations using the Marginalia package
 ** UI Encanhement
 *** Theme
 #+begin_src emacs-lisp :tangle init.el
-  (use-package ef-themes
-    :config
-    (load-theme 'ef-frost :no-confirm)
-    ;;     (ef-themes-load-random 'dark)
-    )
+  (use-package humanoid-themes
+  :custom
+  (humanoid-themes-arc-bg t)
+  (humanoid-themes-comment-italic t)
+  (humanoid-themes-keyword-italic t)
+  (humanoid-themes-underline-parens t)
+  :config
+  (load-theme 'humanoid-dark :no-confirm))
 #+end_src
 *** Transwin
 #+begin_src elisp :tangle init.el
@@ -963,7 +966,7 @@ Enable rich annotations using the Marginalia package
                                         "^\\*vterm.*\\*$")))
 #+end_src
 *** shackle
-#+begin_src elisp 
+#+begin_src elisp
   (use-package shackle
     :init
     (shackle-mode)
@@ -979,6 +982,7 @@ Enable rich annotations using the Marginalia package
         special-mode
         Custom-mode
         grep-mode
+        vterm-mode
         "^\\*eshell.*\\*$"
         "^\\*shell.*\\*$"
         "^\\*term.*\\*$"
@@ -1068,9 +1072,21 @@ Enable rich annotations using the Marginalia package
 #+begin_src elisp :tangle init.el
   (use-package org
     :custom
-    (org-agenda-files '("~/Documents/org/agenda.org")))
+    (org-agenda-files '("~/Documents/org/agenda.org"))
+    (org-startup-indented t))
   (use-package org-modern
+    :custom
+    (org-modern-hide-stars nil)		; adds extra indentation
+    (org-modern-table nil)
+    (org-modern-list 
+     '(;; (?- . "-")
+       (?* . "•")
+       (?+ . "‣")))
     :hook (org-mode . org-modern-mode))
+  (use-package org-modern-indent
+    :elpaca (:host github :repo "jdtsmith/org-modern-indent")
+    :config ; add late to hook
+    (add-hook 'org-mode-hook #'org-modern-indent-mode 90))
 #+end_src
 *** Vterm
 #+begin_src elisp :tangle init.el
@@ -1457,16 +1473,16 @@ Enable rich annotations using the Marginalia package
     ;; If using org-roam-protocol
     (require 'org-roam-protocol))
 
-(use-package websocket
+  (use-package websocket
     :after org-roam)
 
-(use-package org-roam-ui
+  (use-package org-roam-ui
     :after org-roam ;; or :after org
     :custom
     (org-roam-ui-sync-theme t
-          org-roam-ui-follow t
-          org-roam-ui-update-on-save t
-          org-roam-ui-open-on-start t))
+                            org-roam-ui-follow t
+                            org-roam-ui-update-on-save t
+                            org-roam-ui-open-on-start t))
 #+end_src
 *** Beframe
 #+begin_src emacs-lisp :tangle init.el
